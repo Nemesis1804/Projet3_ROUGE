@@ -1,0 +1,25 @@
+{
+  "name": "server_wb_db",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "tsx ./index.ts",
+    "dev": "tsx --watch ./index.ts"
+  },
+  "author": "Nemesis1804",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "@types/node": "^24.2.0",
+    "@types/ws": "^8.18.1",
+    "prisma": "^6.13.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.13.0",
+    "ws": "^8.18.3"
+  }
+}
