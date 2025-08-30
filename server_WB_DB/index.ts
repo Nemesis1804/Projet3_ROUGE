@@ -19,15 +19,35 @@ wss.on("connection", (ws: WebSocket) => {
         // Parse message
         try {
             const json = JSON.parse(msg);
-            console.log("📥 Message JSON:", json);
+
+            // Handle fetch of historical logs (reply only to requester)
+            if (json.type === "command" && json.action === "getLogs") {
+                const limit = Math.min(Number(json.limit) || 300, 300);
+                const rows = await prisma.logs.findMany({
+                    orderBy: { timestamp: "desc" },
+                    take: limit,
+                    select: { id: true, timestamp: true, status: true },
+                });
+                const payload = {
+                    type: "logs",
+                    items: rows.map((r) => ({
+                        id: r.id,
+                        timestamp: r.timestamp.getTime(),
+                        status: r.status,
+                    })),
+                };
+                ws.send(JSON.stringify(payload));
+                return;
+            }
+
             if (json.type === "log") {
                 // Save log to database
                 await prisma.logs.create({
                     data: {
                         status: json.status,
                         timestamp:
-                            json.epoch && json.timestamp
-                                ? new Date(json.epoch + json.timestamp)
+                            json.epoch
+                                ? new Date(json.epoch)
                                 : new Date(),
                     },
                 });
@@ -43,7 +63,6 @@ wss.on("connection", (ws: WebSocket) => {
             console.error("❌ Erreur de parsing JSON:", err);
         }
 
-        // Re-broadcast à tous les autres clients
         clients.forEach((client) => {
             if (client !== ws && client.readyState === WebSocket.OPEN) {
                 client.send(msg);

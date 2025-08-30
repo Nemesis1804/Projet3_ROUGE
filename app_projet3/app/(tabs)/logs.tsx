@@ -26,28 +26,40 @@ export default function LogsScreen() {
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
 
+    ws.onopen = () => {
+      try {
+        ws.send(JSON.stringify({ type: 'command', action: 'getLogs', limit: 300 }));
+      } catch { }
+    };
+
     ws.onmessage = (event) => {
       const dataStr = typeof event.data === 'string' ? event.data : '';
       const parsed = safeParse(dataStr);
 
+      if (isLogsBatch(parsed)) {
+        const items = (parsed.items || [])
+          .map((x: any) => coerceToLog(x))
+          .filter(Boolean) as Log[];
+        items.sort((a, b) => b.timestamp - a.timestamp);
+        setLogs(cap(items));
+        setPage(1);
+        return;
+      }
+
       if (isEvent(parsed)) {
-        const next = [
-          {
-            id: Date.now(),
-            timestamp: normalizeTs(parsed),
-            status: parsed.status === 'door_opened' ? 'Door opened (event)' : 'Door closed (event)',
-          },
-          ...logs,
-        ];
-        setLogs(cap(next));
+        const item: Log = {
+          id: Date.now(),
+          timestamp: normalizeTs(parsed),
+          status: parsed.status === 'door_opened' ? 'Door opened (event)' : 'Door closed (event)',
+        };
+        setLogs(prev => cap([item, ...prev]));
         setPage(1);
         return;
       }
 
       const maybeLog = coerceToLog(parsed);
       if (maybeLog) {
-        const next = [maybeLog, ...logs];
-        setLogs(cap(next));
+        setLogs(prev => cap([maybeLog, ...prev]));
         setPage(1);
       }
     };
@@ -56,7 +68,11 @@ export default function LogsScreen() {
       try { ws.close(); } catch { }
       wsRef.current = null;
     };
-  }, [isAuthed, WS_URL, logs]);
+  }, [isAuthed, WS_URL]); // <- surtout ne pas mettre `logs` ici
+
+  function isLogsBatch(x: any): x is { type: 'logs'; items: any[] } {
+    return x && typeof x === 'object' && x.type === 'logs' && Array.isArray(x.items);
+  }
 
   function safeParse(s: string) { try { return JSON.parse(s); } catch { return s; } }
   function isEvent(x: any): x is { type: 'event'; status: 'door_opened' | 'door_closed'; epoch?: number; timestamp?: number } {
