@@ -1,24 +1,25 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, StyleSheet, View, Platform } from 'react-native';
+import { FlatList, StyleSheet, View } from 'react-native';
+import { Redirect } from 'expo-router';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import ParallaxScrollView from '@/components/ParallaxScrollView';
 import { IconSymbol } from '@/components/ui/IconSymbol';
+import { useAuth } from '../context/auth-context';
 
-type Log = {
-  id: number;
-  timestamp: number;
-  status: string;
-};
+type Log = { id: number; timestamp: number; status: string };
 
 export default function LogsScreen() {
   const WS_URL = 'ws://192.168.1.11:8080';
+  const { isAuthed } = useAuth();
 
   const wsRef = useRef<WebSocket | null>(null);
   const [logs, setLogs] = useState<Log[]>([]);
   const anchorRef = useRef<{ wall: number; uptime: number } | null>(null);
 
   useEffect(() => {
+    if (!isAuthed) return;
+
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
 
@@ -27,14 +28,11 @@ export default function LogsScreen() {
       const parsed = safeParse(dataStr);
 
       if (isEvent(parsed)) {
-        setLogs(prev => cap([
-          {
-            id: Date.now(),
-            timestamp: normalizeTs(parsed),
-            status: parsed.status === 'door_opened' ? 'Door opened (event)' : 'Door closed (event)',
-          },
-          ...prev
-        ]));
+        setLogs(prev => cap([{
+          id: Date.now(),
+          timestamp: normalizeTs(parsed),
+          status: parsed.status === 'door_opened' ? 'Door opened (event)' : 'Door closed (event)',
+        }, ...prev]));
         return;
       }
 
@@ -46,11 +44,9 @@ export default function LogsScreen() {
       try { ws.close(); } catch { }
       wsRef.current = null;
     };
-  }, [WS_URL]);
+  }, [isAuthed, WS_URL]);
 
-  function safeParse(s: string) {
-    try { return JSON.parse(s); } catch { return s; }
-  }
+  function safeParse(s: string) { try { return JSON.parse(s); } catch { return s; } }
   function isEvent(x: any): x is { type: 'event'; status: 'door_opened' | 'door_closed'; epoch?: number; timestamp?: number } {
     return x && typeof x === 'object' && x.type === 'event' && typeof x.status === 'string';
   }
@@ -60,10 +56,7 @@ export default function LogsScreen() {
     const ts = Number(obj?.timestamp);
     if (Number.isFinite(ts)) {
       if (ts < 1e12) {
-        if (!anchorRef.current) {
-          anchorRef.current = { wall: Date.now(), uptime: ts };
-          return Date.now();
-        }
+        if (!anchorRef.current) { anchorRef.current = { wall: Date.now(), uptime: ts }; return Date.now(); }
         return anchorRef.current.wall + (ts - anchorRef.current.uptime);
       }
       return ts;
@@ -73,10 +66,7 @@ export default function LogsScreen() {
   function coerceToLog(x: any): Log | null {
     if (!x) return null;
     if (typeof x === 'object' && typeof x.status === 'string') {
-      const id =
-        typeof x.id === 'number' ? x.id :
-          Number.isFinite(Number(x.id)) ? Number(x.id) :
-            Date.now();
+      const id = typeof x.id === 'number' ? x.id : Number.isFinite(Number(x.id)) ? Number(x.id) : Date.now();
       const ts = normalizeTs(x);
       return { id, timestamp: ts, status: x.status };
     }
@@ -86,8 +76,10 @@ export default function LogsScreen() {
     }
     return null;
   }
-  function cap(arr: Log[], max = 300) {
-    return arr.slice(0, max);
+  function cap(arr: Log[], max = 300) { return arr.slice(0, max); }
+
+  if (!isAuthed) {
+    return <Redirect href="/(tabs)" />;
   }
 
   return (

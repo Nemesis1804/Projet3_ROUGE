@@ -1,14 +1,21 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, View, Platform } from 'react-native';
+import { Redirect } from 'expo-router';
 import ParallaxScrollView from '@/components/ParallaxScrollView';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { Image } from 'expo-image';
+import { useAuth } from '../context/auth-context';
 
 type WSStatus = 'connecting' | 'open' | 'closing' | 'closed';
 
 export default function AdminScreen() {
   const WS_URL = 'ws://192.168.1.11:8080';
+  const { isAuthed } = useAuth();
+
+  if (!isAuthed) {
+    return <Redirect href='/(tabs)' />;
+  }
 
   const wsRef = useRef<WebSocket | null>(null);
   const [wsStatus, setWsStatus] = useState<WSStatus>('connecting');

@@ -1,6 +1,6 @@
-import { Tabs } from 'expo-router';
+import { Tabs, useRouter } from 'expo-router';
 import React from 'react';
-import { Platform } from 'react-native';
+import { Platform, Alert } from 'react-native';
 
 import { HapticTab } from '@/components/HapticTab';
 import { IconSymbol } from '@/components/ui/IconSymbol';
@@ -8,8 +8,22 @@ import TabBarBackground from '@/components/ui/TabBarBackground';
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
 
-export default function TabLayout() {
+import { AuthProvider, useAuth } from '../context/auth-context';
+
+function TabsInner() {
   const colorScheme = useColorScheme();
+  const { isAuthed } = useAuth();
+  const router = useRouter();
+
+  const protect = () => ({
+    tabPress: (e: any) => {
+      if (!isAuthed) {
+        e.preventDefault();
+        Alert.alert('Authentification required', 'Enter your code at the home page.');
+        router.push('/(tabs)');
+      }
+    },
+  });
 
   return (
     <Tabs
@@ -19,12 +33,11 @@ export default function TabLayout() {
         tabBarButton: HapticTab,
         tabBarBackground: TabBarBackground,
         tabBarStyle: Platform.select({
-          ios: {
-            position: 'absolute',
-          },
+          ios: { position: 'absolute' },
           default: {},
         }),
-      }}>
+      }}
+    >
       <Tabs.Screen
         name="index"
         options={{
@@ -38,6 +51,7 @@ export default function TabLayout() {
           title: 'Logs',
           tabBarIcon: ({ color }) => <IconSymbol size={28} name="doc.text.fill" color={color} />,
         }}
+        listeners={protect()}
       />
       <Tabs.Screen
         name="data"
@@ -45,6 +59,7 @@ export default function TabLayout() {
           title: 'Data',
           tabBarIcon: ({ color }) => <IconSymbol size={28} name="chart.bar.fill" color={color} />,
         }}
+        listeners={protect()}
       />
       <Tabs.Screen
         name="admin"
@@ -52,7 +67,16 @@ export default function TabLayout() {
           title: 'Admin',
           tabBarIcon: ({ color }) => <IconSymbol size={28} name="lock.shield" color={color} />,
         }}
+        listeners={protect()}
       />
     </Tabs>
+  );
+}
+
+export default function TabLayout() {
+  return (
+    <AuthProvider>
+      <TabsInner />
+    </AuthProvider>
   );
 }

@@ -1,14 +1,5 @@
 import React, { useState } from 'react';
-import {
-  Platform,
-  StyleSheet,
-  Pressable,
-  Text,
-  Modal,
-  View,
-  TextInput,
-  TouchableOpacity,
-} from 'react-native';
+import { StyleSheet, Pressable, Text, View, TextInput, TouchableOpacity, Alert } from 'react-native';
 import { Image } from 'expo-image';
 
 import { HelloWave } from '@/components/HelloWave';
@@ -16,52 +7,70 @@ import ParallaxScrollView from '@/components/ParallaxScrollView';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 
+import { useAuth } from '../context/auth-context';
+
 export default function HomeScreen() {
   const [modalVisible, setModalVisible] = useState(false);
   const [code, setCode] = useState('');
+  const { isAuthed, loginWithPin, logout } = useAuth();
 
   const handleValidate = () => {
-    console.log('Entered code:', code);
-    setModalVisible(false);
-    setCode('');
+    const ok = loginWithPin(code.trim());
+    if (ok) {
+      setModalVisible(false);
+      setCode('');
+      Alert.alert('Welcome', 'authetification grated');
+    } else {
+      Alert.alert('wrooooonnnng', 'Try again.');
+    }
   };
 
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }
-    >
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-
-      <Pressable style={styles.button} onPress={() => setModalVisible(true)}>
-        <Text style={styles.buttonText}>Identify Yourself</Text>
-      </Pressable>
-
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">It is mandatory</ThemedText>
-        <ThemedText>
-          <ThemedText type="defaultSemiBold">
-            Without authentication, you will not be able to access the rest of the application.
-          </ThemedText>
-        </ThemedText>
-      </ThemedView>
-
-      {/* Modal to enter the code */}
-      <Modal
-        animationType="slide"
-        transparent={true}
-        visible={modalVisible}
-        onRequestClose={() => setModalVisible(false)}
+    <View style={styles.screen}>
+      <ParallaxScrollView
+        headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
+        headerImage={
+          <Image
+            source={require('@/assets/images/partial-react-logo.png')}
+            style={styles.reactLogo}
+          />
+        }
       >
-        <View style={styles.modalOverlay}>
+        <ThemedView style={styles.titleContainer}>
+          <ThemedText type="title">Welcome!</ThemedText>
+          <HelloWave />
+        </ThemedView>
+
+        {!isAuthed ? (
+          <>
+            <Pressable style={styles.button} onPress={() => setModalVisible(true)}>
+              <Text style={styles.buttonText}>Identify Yourself</Text>
+            </Pressable>
+
+            <ThemedView style={styles.stepContainer}>
+              <ThemedText type="subtitle">It is mandatory</ThemedText>
+              <ThemedText>
+                <ThemedText type="defaultSemiBold">
+                  Without authentication, you will not be able to access the rest of the application.
+                </ThemedText>
+              </ThemedText>
+            </ThemedView>
+          </>
+        ) : (
+          <>
+            <ThemedView style={styles.stepContainer}>
+              <ThemedText type="subtitle">You are authenticated</ThemedText>
+              <ThemedText>Tabs Logs, Data and Admin are now accessible.</ThemedText>
+            </ThemedView>
+            <Pressable style={[styles.button, { backgroundColor: '#E53935' }]} onPress={logout}>
+              <Text style={styles.buttonText}>Log out</Text>
+            </Pressable>
+          </>
+        )}
+      </ParallaxScrollView>
+
+      {modalVisible && (
+        <View style={styles.overlay} pointerEvents="auto">
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Enter your code</Text>
             <TextInput
@@ -69,7 +78,8 @@ export default function HomeScreen() {
               placeholder="Enter code"
               value={code}
               onChangeText={setCode}
-              keyboardType="default"
+              keyboardType="number-pad"
+              secureTextEntry
             />
             <View style={styles.modalButtons}>
               <TouchableOpacity onPress={handleValidate} style={styles.modalButton}>
@@ -84,12 +94,14 @@ export default function HomeScreen() {
             </View>
           </View>
         </View>
-      </Modal>
-    </ParallaxScrollView>
+      )}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screen: { flex: 1, position: 'relative' },
+
   titleContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -120,18 +132,25 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  modalOverlay: {
-    flex: 1,
+
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 999,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: 'rgba(0,0,0,0.4)',
   },
   modalContent: {
-    backgroundColor: '#fff',
+    width: '86%',
+    maxWidth: 420,
     borderRadius: 12,
     padding: 24,
-    width: '80%',
-    alignItems: 'center',
+    backgroundColor: '#fff',
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
   },
   modalTitle: {
     fontSize: 20,
@@ -151,6 +170,7 @@ const styles = StyleSheet.create({
   modalButtons: {
     flexDirection: 'row',
     gap: 12,
+    justifyContent: 'flex-end',
   },
   modalButton: {
     backgroundColor: '#2196F3',

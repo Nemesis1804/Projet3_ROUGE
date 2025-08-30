@@ -1,15 +1,24 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View, Platform } from 'react-native';
+import { Redirect } from 'expo-router';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import ParallaxScrollView from '@/components/ParallaxScrollView';
 import { IconSymbol } from '@/components/ui/IconSymbol';
+import { useAuth } from '../context/auth-context';
 
 type WSStatus = 'connecting' | 'open' | 'closing' | 'closed';
 type DoorStatus = 'open' | 'closed' | 'unknown';
 
 export default function DataScreen() {
   const WS_URL = 'ws://192.168.1.11:8080';
+
+  const { isAuthed } = useAuth();
+
+  // ✅ Si non authentifié → redirection immédiate vers Home
+  if (!isAuthed) {
+    return <Redirect href='/(tabs)' />;
+  }
 
   const wsRef = useRef<WebSocket | null>(null);
   const [wsStatus, setWsStatus] = useState<WSStatus>('connecting');
@@ -40,7 +49,12 @@ export default function DataScreen() {
     ws.onopen = () => {
       setWsStatus('open');
       setConnectedAt(Date.now());
-      ws.send(JSON.stringify({ type: 'command', action: 'getState', source: 'diagnostics', ts: Date.now() }));
+      ws.send(JSON.stringify({
+        type: 'command',
+        action: 'getState',
+        source: 'diagnostics',
+        ts: Date.now()
+      }));
     };
 
     ws.onmessage = (event) => {
