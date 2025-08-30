@@ -12,8 +12,8 @@
 HUSKYLENS husky;
 
 // === Wi-Fi ===
-const char *ssid = "baguette";
-const char *password = "cwassant";
+const char *ssid = "WiFi-2.4-BB30";
+const char *password = "U64cV5f4XggH";
 
 // === WebSocket ===
 WebSocketsClient webSocket;
@@ -309,12 +309,12 @@ void setup()
   delay(800);
   lcd.clear();
 
-  while (!husky.begin(Wire))
-  {
-    Serial.println("Husky I2C init failed, retry...");
-    delay(1000);
-  }
-  Serial.println("HuskyLens OK (I2C)");
+//  while (!husky.begin(Wire))
+//  {
+//    Serial.println("Husky I2C init failed, retry...");
+//    delay(1000);
+//  }
+//  Serial.println("HuskyLens OK (I2C)");
 
   bool initDoorOpen = pcf.digitalRead(PIN_REED);
   lastDoorOpenState = initDoorOpen;

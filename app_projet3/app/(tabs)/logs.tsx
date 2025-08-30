@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, StyleSheet, View } from 'react-native';
+import { FlatList, StyleSheet, View, Pressable } from 'react-native';
 import { Redirect } from 'expo-router';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -17,6 +17,9 @@ export default function LogsScreen() {
   const [logs, setLogs] = useState<Log[]>([]);
   const anchorRef = useRef<{ wall: number; uptime: number } | null>(null);
 
+  const PAGE_SIZE = 10;
+  const [page, setPage] = useState(1);
+
   useEffect(() => {
     if (!isAuthed) return;
 
@@ -28,23 +31,32 @@ export default function LogsScreen() {
       const parsed = safeParse(dataStr);
 
       if (isEvent(parsed)) {
-        setLogs(prev => cap([{
-          id: Date.now(),
-          timestamp: normalizeTs(parsed),
-          status: parsed.status === 'door_opened' ? 'Door opened (event)' : 'Door closed (event)',
-        }, ...prev]));
+        const next = [
+          {
+            id: Date.now(),
+            timestamp: normalizeTs(parsed),
+            status: parsed.status === 'door_opened' ? 'Door opened (event)' : 'Door closed (event)',
+          },
+          ...logs,
+        ];
+        setLogs(cap(next));
+        setPage(1);
         return;
       }
 
       const maybeLog = coerceToLog(parsed);
-      if (maybeLog) setLogs(prev => cap([maybeLog, ...prev]));
+      if (maybeLog) {
+        const next = [maybeLog, ...logs];
+        setLogs(cap(next));
+        setPage(1);
+      }
     };
 
     return () => {
       try { ws.close(); } catch { }
       wsRef.current = null;
     };
-  }, [isAuthed, WS_URL]);
+  }, [isAuthed, WS_URL, logs]);
 
   function safeParse(s: string) { try { return JSON.parse(s); } catch { return s; } }
   function isEvent(x: any): x is { type: 'event'; status: 'door_opened' | 'door_closed'; epoch?: number; timestamp?: number } {
@@ -82,6 +94,13 @@ export default function LogsScreen() {
     return <Redirect href="/(tabs)" />;
   }
 
+  const totalPages = Math.max(1, Math.ceil(logs.length / PAGE_SIZE));
+  const start = (page - 1) * PAGE_SIZE;
+  const pageItems = logs.slice(start, start + PAGE_SIZE);
+
+  const canPrev = page > 1;
+  const canNext = page < totalPages;
+
   return (
     <ParallaxScrollView
       headerBackgroundColor={{ light: '#D0D0D0', dark: '#353636' }}
@@ -100,9 +119,8 @@ export default function LogsScreen() {
 
       <ThemedView style={styles.listCard}>
         <FlatList
-          data={logs}
+          data={pageItems}
           keyExtractor={(item) => String(item.id)}
-          inverted
           contentContainerStyle={{ gap: 8, paddingBottom: 16 }}
           renderItem={({ item }) => (
             <View style={styles.logRow}>
@@ -112,12 +130,30 @@ export default function LogsScreen() {
               <ThemedText style={styles.logStatus}>{item.status}</ThemedText>
             </View>
           )}
-          ListEmptyComponent={
-            <ThemedText style={{ opacity: 0.7 }}>
-              No events yet.
-            </ThemedText>
-          }
+          ListEmptyComponent={<ThemedText style={{ opacity: 0.7 }}>No events yet.</ThemedText>}
         />
+
+        <View style={styles.pagerRow}>
+          <Pressable
+            onPress={() => canPrev && setPage(p => Math.max(1, p - 1))}
+            style={[styles.pagerBtn, !canPrev && styles.pagerBtnDisabled]}
+            disabled={!canPrev}
+          >
+            <ThemedText style={styles.pagerTxt}>Prev</ThemedText>
+          </Pressable>
+
+          <ThemedText style={styles.pageIndicator}>
+            {page}/{totalPages}
+          </ThemedText>
+
+          <Pressable
+            onPress={() => canNext && setPage(p => Math.min(totalPages, p + 1))}
+            style={[styles.pagerBtn, !canNext && styles.pagerBtnDisabled]}
+            disabled={!canNext}
+          >
+            <ThemedText style={styles.pagerTxt}>Next</ThemedText>
+          </Pressable>
+        </View>
       </ThemedView>
     </ParallaxScrollView>
   );
@@ -152,4 +188,23 @@ const styles = StyleSheet.create({
   },
   logTs: { opacity: 0.7, marginBottom: 2 },
   logStatus: { fontWeight: '500' },
+
+  pagerRow: {
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  pagerBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  pagerBtnDisabled: {
+    opacity: 0.5,
+  },
+  pagerTxt: { fontWeight: '600' },
+  pageIndicator: { fontWeight: '600' },
 });

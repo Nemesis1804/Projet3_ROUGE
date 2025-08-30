@@ -15,7 +15,6 @@ export default function DataScreen() {
 
   const { isAuthed } = useAuth();
 
-  // ✅ Si non authentifié → redirection immédiate vers Home
   if (!isAuthed) {
     return <Redirect href='/(tabs)' />;
   }
