@@ -11,15 +11,21 @@
   "author": "Nemesis1804",
   "license": "ISC",
   "description": "",
+  "prisma": {
+    "seed": "ts-node prisma/seed.ts"
+  },
   "devDependencies": {
+    "@types/bcrypt": "^6.0.0",
     "@types/node": "^24.2.0",
     "@types/ws": "^8.18.1",
-    "prisma": "^6.13.0",
+    "prisma": "^6.19.1",
+    "ts-node": "^10.9.2",
     "tsx": "^4.20.3",
     "typescript": "^5.9.2"
   },
   "dependencies": {
-    "@prisma/client": "^6.13.0",
+    "@prisma/client": "^6.19.1",
+    "bcrypt": "^6.0.0",
     "ws": "^8.18.3"
   }
 }

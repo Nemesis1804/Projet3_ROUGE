@@ -5,7 +5,7 @@ import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import ParallaxScrollView from '@/components/ParallaxScrollView';
 import { IconSymbol } from '@/components/ui/IconSymbol';
-import { useAuth } from '../context/auth-context';
+import { useAuth } from '../../src/context/auth-context';
 
 type WSStatus = 'connecting' | 'open' | 'closing' | 'closed';
 type DoorStatus = 'open' | 'closed' | 'unknown';
