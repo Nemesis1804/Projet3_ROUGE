@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, StyleSheet, View, Pressable } from 'react-native';
+import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
+import { FlatList, StyleSheet, View, Pressable, Platform } from 'react-native';
 import { Redirect } from 'expo-router';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -9,27 +9,39 @@ import { useAuth } from '../../src/context/auth-context';
 
 type Log = { id: number; timestamp: number; status: string };
 
+// ✅ IP du PC
+const DEV_PC_IP = '10.43.170.75';
+const API_PORT = 8080;
+
+function getWsUrl() {
+  if (Platform.OS === 'web') return `ws://localhost:${API_PORT}`;
+  return `ws://${DEV_PC_IP}:${API_PORT}`;
+}
+
 export default function LogsScreen() {
-  const WS_URL = 'ws://192.168.1.11:8080';
   const { isAuthed } = useAuth();
 
+  const WS_URL = useMemo(() => getWsUrl(), []);
   const wsRef = useRef<WebSocket | null>(null);
+
   const [logs, setLogs] = useState<Log[]>([]);
   const anchorRef = useRef<{ wall: number; uptime: number } | null>(null);
 
   const PAGE_SIZE = 10;
   const [page, setPage] = useState(1);
 
-  useEffect(() => {
-    if (!isAuthed) return;
+  const [refreshing, setRefreshing] = useState(false);
 
+  const connectWs = useCallback(() => {
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
 
     ws.onopen = () => {
+      // À l’ouverture : on charge direct
       try {
         ws.send(JSON.stringify({ type: 'command', action: 'getLogs', limit: 300 }));
       } catch { }
+      setRefreshing(false);
     };
 
     ws.onmessage = (event) => {
@@ -43,6 +55,7 @@ export default function LogsScreen() {
         items.sort((a, b) => b.timestamp - a.timestamp);
         setLogs(cap(items));
         setPage(1);
+        setRefreshing(false);
         return;
       }
 
@@ -52,35 +65,84 @@ export default function LogsScreen() {
           timestamp: normalizeTs(parsed),
           status: parsed.status === 'door_opened' ? 'Door opened (event)' : 'Door closed (event)',
         };
-        setLogs(prev => cap([item, ...prev]));
+        setLogs((prev) => cap([item, ...prev]));
         setPage(1);
         return;
       }
 
       const maybeLog = coerceToLog(parsed);
       if (maybeLog) {
-        setLogs(prev => cap([maybeLog, ...prev]));
+        setLogs((prev) => cap([maybeLog, ...prev]));
         setPage(1);
       }
     };
 
+    ws.onerror = () => {
+      setRefreshing(false);
+    };
+
+    ws.onclose = () => {
+      // ne rien faire
+      setRefreshing(false);
+    };
+
+    return ws;
+  }, [WS_URL]);
+
+  const requestLogs = useCallback(() => {
+    if (!isAuthed) return;
+
+    setRefreshing(true);
+
+    const ws = wsRef.current;
+
+    // Si déjà ouvert : on demande juste les logs
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify({ type: 'command', action: 'getLogs', limit: 300 }));
+        return;
+      } catch {
+        // si erreur, on retombe sur reconnexion
+      }
+    }
+
+    // Si pas connecté : on reconnecte
+    try {
+      if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+        // laisse faire
+        return;
+      }
+    } catch { }
+
+    connectWs();
+  }, [isAuthed, connectWs]);
+
+  useEffect(() => {
+    if (!isAuthed) return;
+
+    // Connexion initiale
+    connectWs();
+
     return () => {
-      try { ws.close(); } catch { }
+      try { wsRef.current?.close(); } catch { }
       wsRef.current = null;
     };
-  }, [isAuthed, WS_URL]); // <- surtout ne pas mettre `logs` ici
+  }, [isAuthed, connectWs]);
 
   function isLogsBatch(x: any): x is { type: 'logs'; items: any[] } {
     return x && typeof x === 'object' && x.type === 'logs' && Array.isArray(x.items);
   }
 
   function safeParse(s: string) { try { return JSON.parse(s); } catch { return s; } }
+
   function isEvent(x: any): x is { type: 'event'; status: 'door_opened' | 'door_closed'; epoch?: number; timestamp?: number } {
     return x && typeof x === 'object' && x.type === 'event' && typeof x.status === 'string';
   }
+
   function normalizeTs(obj: any): number {
     const epoch = Number(obj?.epoch);
     if (Number.isFinite(epoch) && epoch > 1e12) return epoch;
+
     const ts = Number(obj?.timestamp);
     if (Number.isFinite(ts)) {
       if (ts < 1e12) {
@@ -91,6 +153,7 @@ export default function LogsScreen() {
     }
     return Date.now();
   }
+
   function coerceToLog(x: any): Log | null {
     if (!x) return null;
     if (typeof x === 'object' && typeof x.status === 'string') {
@@ -104,6 +167,7 @@ export default function LogsScreen() {
     }
     return null;
   }
+
   function cap(arr: Log[], max = 300) { return arr.slice(0, max); }
 
   if (!isAuthed) {
@@ -131,6 +195,17 @@ export default function LogsScreen() {
     >
       <ThemedView style={styles.titleContainer}>
         <ThemedText type="title">Event History</ThemedText>
+
+        {/* ✅ bouton refresh à côté du titre */}
+        <Pressable
+          onPress={requestLogs}
+          style={[styles.refreshBtn, refreshing && styles.refreshBtnDisabled]}
+          disabled={refreshing}
+        >
+          <ThemedText style={styles.refreshTxt}>
+            {refreshing ? 'Refreshing…' : 'Refresh'}
+          </ThemedText>
+        </Pressable>
       </ThemedView>
 
       <ThemedView style={styles.listCard}>
@@ -151,7 +226,7 @@ export default function LogsScreen() {
 
         <View style={styles.pagerRow}>
           <Pressable
-            onPress={() => canPrev && setPage(p => Math.max(1, p - 1))}
+            onPress={() => canPrev && setPage((p) => Math.max(1, p - 1))}
             style={[styles.pagerBtn, !canPrev && styles.pagerBtnDisabled]}
             disabled={!canPrev}
           >
@@ -163,7 +238,7 @@ export default function LogsScreen() {
           </ThemedText>
 
           <Pressable
-            onPress={() => canNext && setPage(p => Math.min(totalPages, p + 1))}
+            onPress={() => canNext && setPage((p) => Math.min(totalPages, p + 1))}
             style={[styles.pagerBtn, !canNext && styles.pagerBtnDisabled]}
             disabled={!canNext}
           >
@@ -184,10 +259,26 @@ const styles = StyleSheet.create({
   },
   titleContainer: {
     flexDirection: 'row',
-    gap: 8,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
     paddingHorizontal: 12,
     paddingTop: 8,
   },
+
+  refreshBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  refreshBtnDisabled: {
+    opacity: 0.6,
+  },
+  refreshTxt: {
+    fontWeight: '700',
+  },
+
   listCard: {
     marginHorizontal: 12,
     marginBottom: 16,

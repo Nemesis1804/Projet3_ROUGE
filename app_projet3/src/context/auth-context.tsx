@@ -29,13 +29,12 @@ const AuthContext = createContext<AuthCtx | undefined>(undefined);
 const TOKEN_KEY = "auth_token";
 const USER_KEY = "auth_user";
 
-// ✅ mets l’IP de ton PC (uniquement pour téléphone)
-const DEV_PC_IP = "192.168.1.50";
+// ✅ IP du PC (ton serveur/API tourne sur le PC)
+const DEV_PC_IP = "10.43.170.75";
 const API_PORT = 8080;
 
 function getApiBase() {
     if (Platform.OS === "web") return `http://localhost:${API_PORT}`;
-    // Android emulator: http://10.0.2.2:${API_PORT}
     return `http://${DEV_PC_IP}:${API_PORT}`;
 }
 
@@ -64,6 +63,50 @@ async function readJsonSafe(r: Response) {
     }
 }
 
+// petit helper pour timeout réseau (évite "ça tourne dans le vide")
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, ms = 10000) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), ms);
+    try {
+        return await fetch(input, { ...init, signal: controller.signal });
+    } finally {
+        clearTimeout(id);
+    }
+}
+
+// ✅ envoie un log dans la DB via POST /logs (même si l'app n'utilise pas de websocket)
+async function postLog(status: string): Promise<{ ok: boolean; id?: number; error?: string }> {
+    const API_BASE = getApiBase();
+
+    try {
+        console.log("[AUTH] postLog ->", `${API_BASE}/logs`, status);
+
+        const r = await fetchWithTimeout(
+            `${API_BASE}/logs`,
+            {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ status }),
+            },
+            8000
+        );
+
+        const data = await readJsonSafe(r);
+
+        if (!r.ok) {
+            console.log("[AUTH] postLog failed status:", r.status, data);
+            return { ok: false, error: data?.error ?? `HTTP ${r.status}` };
+        }
+
+        console.log("[AUTH] postLog OK id=", data?.id);
+        return { ok: true, id: data?.id };
+    } catch (e: any) {
+        console.log("[AUTH] postLog error:", e?.message ?? e);
+        return { ok: false, error: e?.message ?? "Network error" };
+    }
+}
+
+
 export function AuthProvider({ children }: { children: ReactNode }) {
     const [token, setToken] = useState<string | null>(null);
     const [user, setUser] = useState<User | null>(null);
@@ -81,19 +124,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const login = async (firstName: string, lastName: string, password: string): Promise<AuthResult> => {
         const API_BASE = getApiBase();
         try {
-            const r = await fetch(`${API_BASE}/auth/login`, {
+            const r = await fetchWithTimeout(`${API_BASE}/auth/login`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ firstName, lastName, password }),
             });
+
             const data = await readJsonSafe(r);
             if (!r.ok) return { ok: false, error: data?.error ?? `Login failed (${r.status})` };
 
             await saveSession(data.token, data.user);
             setToken(data.token);
             setUser(data.user);
+
+            // ✅ LOG en DB
+            await postLog(`USER CONNECTED: ${data.user.firstName} ${data.user.lastName}`);
+
             return { ok: true };
         } catch (e: any) {
+            if (e?.name === "AbortError") return { ok: false, error: "Timeout: serveur injoignable" };
             return { ok: false, error: e?.message ?? "Network error" };
         }
     };
@@ -101,19 +150,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const register = async (firstName: string, lastName: string, password: string): Promise<AuthResult> => {
         const API_BASE = getApiBase();
         try {
-            const r = await fetch(`${API_BASE}/auth/register`, {
+            const r = await fetchWithTimeout(`${API_BASE}/auth/register`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ firstName, lastName, password }),
             });
+
             const data = await readJsonSafe(r);
             if (!r.ok) return { ok: false, error: data?.error ?? `Register failed (${r.status})` };
 
             await saveSession(data.token, data.user);
             setToken(data.token);
             setUser(data.user);
+
+            // ✅ LOG en DB
+            await postLog(`NEW USER CREATED: ${data.user.firstName} ${data.user.lastName}`);
+
             return { ok: true };
         } catch (e: any) {
+            if (e?.name === "AbortError") return { ok: false, error: "Timeout: serveur injoignable" };
             return { ok: false, error: e?.message ?? "Network error" };
         }
     };
@@ -124,7 +179,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(null);
     };
 
-    const value = useMemo(() => ({ isAuthed, user, token, login, register, logout }), [isAuthed, user, token]);
+    const value = useMemo(
+        () => ({ isAuthed, user, token, login, register, logout }),
+        [isAuthed, user, token]
+    );
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

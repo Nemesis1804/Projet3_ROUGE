@@ -16,7 +16,7 @@ type DbUser = {
   createdAt: string;
 };
 
-const DEV_PC_IP = "192.168.1.50";
+const DEV_PC_IP = "10.43.170.75";
 const API_PORT = 8080;
 
 function getApiBase() {

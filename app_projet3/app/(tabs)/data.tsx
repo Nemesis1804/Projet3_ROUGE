@@ -1,169 +1,122 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { StyleSheet, View, Platform } from 'react-native';
-import { Redirect } from 'expo-router';
-import { ThemedText } from '@/components/ThemedText';
-import { ThemedView } from '@/components/ThemedView';
-import ParallaxScrollView from '@/components/ParallaxScrollView';
-import { IconSymbol } from '@/components/ui/IconSymbol';
-import { useAuth } from '../../src/context/auth-context';
+import React, { useEffect, useState } from "react";
+import { StyleSheet, View, Platform, Pressable } from "react-native";
+import { Redirect } from "expo-router";
+import { ThemedText } from "@/components/ThemedText";
+import { ThemedView } from "@/components/ThemedView";
+import ParallaxScrollView from "@/components/ParallaxScrollView";
+import { IconSymbol } from "@/components/ui/IconSymbol";
+import { useAuth } from "../../src/context/auth-context";
 
-type WSStatus = 'connecting' | 'open' | 'closing' | 'closed';
-type DoorStatus = 'open' | 'closed' | 'unknown';
+type ServiceStatus = {
+  api: boolean;
+  database: boolean;
+  mqtt: boolean;
+  timestamp?: number;
+};
+
+const DEV_PC_IP = "10.43.170.75";
+const API_PORT = 8080;
+
+function getApiBase() {
+  if (Platform.OS === "web") return `http://localhost:${API_PORT}`;
+  return `http://${DEV_PC_IP}:${API_PORT}`;
+}
 
 export default function DataScreen() {
-  const WS_URL = 'ws://192.168.1.11:8080';
-
+  // ✅ Hooks TOUJOURS en premier, jamais après un return conditionnel
   const { isAuthed } = useAuth();
 
-  if (!isAuthed) {
-    return <Redirect href='/(tabs)' />;
-  }
+  const [status, setStatus] = useState<ServiceStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const wsRef = useRef<WebSocket | null>(null);
-  const [wsStatus, setWsStatus] = useState<WSStatus>('connecting');
-  const [connectedAt, setConnectedAt] = useState<number | null>(null);
-  const [msgCount, setMsgCount] = useState(0);
-  const [bytesRx, setBytesRx] = useState(0);
-  const [lastError, setLastError] = useState<string | null>(null);
-  const [lastRaw, setLastRaw] = useState<string | null>(null);
-  const [lastDecoded, setLastDecoded] = useState<any>(null);
-  const [doorStatus, setDoorStatus] = useState<DoorStatus>('unknown');
+  const fetchStatus = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const r = await fetch(`${getApiBase()}/status`);
+      const data = await r.json().catch(() => null);
 
-  const statusColor = useMemo(() => {
-    switch (wsStatus) {
-      case 'open': return '#22c55e';
-      case 'connecting': return '#f59e0b';
-      case 'closing': return '#a3a3a3';
-      case 'closed': return '#ef4444';
-      default: return '#a3a3a3';
+      if (!r.ok) {
+        throw new Error(data?.error ?? `HTTP ${r.status}`);
+      }
+
+      setStatus(data);
+    } catch (e: any) {
+      setStatus(null);
+      setError(e?.message ?? "Network error");
+    } finally {
+      setLoading(false);
     }
-  }, [wsStatus]);
+  };
 
   useEffect(() => {
-    const ws = new WebSocket(WS_URL);
-    wsRef.current = ws;
-    setWsStatus('connecting');
-    setLastError(null);
+    if (!isAuthed) return; // ✅ ok: on ne return pas du composant, juste du useEffect
+    fetchStatus();
+  }, [isAuthed]);
 
-    ws.onopen = () => {
-      setWsStatus('open');
-      setConnectedAt(Date.now());
-      ws.send(JSON.stringify({
-        type: 'command',
-        action: 'getState',
-        source: 'diagnostics',
-        ts: Date.now()
-      }));
-    };
-
-    ws.onmessage = (event) => {
-      const dataStr = typeof event.data === 'string' ? event.data : '';
-      setLastRaw(dataStr);
-      setMsgCount((c) => c + 1);
-      setBytesRx((b) => b + dataStr.length);
-
-      const parsed = safeParse(dataStr);
-      setLastDecoded(parsed);
-
-      if (isEvent(parsed)) {
-        if (parsed.status === 'door_opened') setDoorStatus('open');
-        else if (parsed.status === 'door_closed') setDoorStatus('closed');
-      }
-    };
-
-    ws.onerror = (err: any) => {
-      setLastError(err?.message ? String(err.message) : 'WebSocket error');
-    };
-
-    ws.onclose = () => setWsStatus('closed');
-
-    return () => {
-      setWsStatus('closing');
-      try { ws.close(); } catch { }
-      wsRef.current = null;
-    };
-  }, [WS_URL]);
-
-  function safeParse(s: string) {
-    try { return JSON.parse(s); } catch { return s; }
+  // ✅ Maintenant seulement, on peut return conditionnellement
+  if (!isAuthed) {
+    return <Redirect href="/(tabs)" />;
   }
-  function isEvent(x: any): x is { type: 'event'; status: string } {
-    return x && typeof x === 'object' && x.type === 'event' && typeof x.status === 'string';
-  }
-  function pretty(x: any) {
-    try { return JSON.stringify(x, null, 2); } catch { return String(x); }
-  }
+
+  const dotColor = (ok: boolean) => ({ backgroundColor: ok ? "#22c55e" : "#ef4444" });
 
   return (
     <ParallaxScrollView
-      headerBackgroundColor={{ light: '#D0D0D0', dark: '#353636' }}
+      headerBackgroundColor={{ light: "#D0D0D0", dark: "#353636" }}
       headerImage={
         <IconSymbol
           size={310}
           color="#808080"
-          name="chevron.left.forwardslash.chevron.right"
+          name="gearshape.2"
           style={styles.headerImage}
         />
       }
     >
       <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">WebSocket Diagnostics</ThemedText>
+        <ThemedText type="title">System Status</ThemedText>
+
+        <Pressable
+          style={[styles.refreshBtn, loading && { opacity: 0.6 }]}
+          onPress={fetchStatus}
+          disabled={loading}
+        >
+          <ThemedText style={styles.refreshTxt}>{loading ? "Refreshing…" : "Refresh"}</ThemedText>
+        </Pressable>
       </ThemedView>
 
       <ThemedView style={styles.card}>
         <View style={styles.row}>
-          <View style={[styles.dot, { backgroundColor: statusColor }]} />
-          <ThemedText style={styles.statusText}>{wsStatus.toUpperCase()}</ThemedText>
+          <ThemedText style={styles.kvKey}>API Server</ThemedText>
+          <View style={[styles.dot, dotColor(status?.api === true)]} />
         </View>
 
-        <View style={styles.kvRow}>
-          <ThemedText style={styles.kvKey}>Server</ThemedText>
-          <ThemedText style={styles.kvVal}>{WS_URL}</ThemedText>
+        <View style={styles.row}>
+          <ThemedText style={styles.kvKey}>Database</ThemedText>
+          <View style={[styles.dot, dotColor(status?.database === true)]} />
         </View>
 
-        <View style={styles.kvRow}>
-          <ThemedText style={styles.kvKey}>Connected</ThemedText>
-          <ThemedText style={styles.kvVal}>
-            {connectedAt ? new Date(connectedAt).toLocaleString() : '—'}
+        <View style={styles.row}>
+          <ThemedText style={styles.kvKey}>MQTT</ThemedText>
+          <View style={[styles.dot, dotColor(status?.mqtt === true)]} />
+        </View>
+
+        {status?.timestamp && (
+          <ThemedText style={styles.ts}>
+            Last check: {new Date(status.timestamp).toLocaleString()}
           </ThemedText>
-        </View>
+        )}
 
-        <View style={styles.kvRow}>
-          <ThemedText style={styles.kvKey}>Door status</ThemedText>
-          <ThemedText style={styles.kvVal}>
-            {doorStatus === 'open' ? 'Open' : doorStatus === 'closed' ? 'Closed' : 'Unknown'}
-          </ThemedText>
-        </View>
-
-        <View style={styles.kvRow}>
-          <ThemedText style={styles.kvKey}>Messages received</ThemedText>
-          <ThemedText style={styles.kvVal}>{msgCount}</ThemedText>
-        </View>
-
-        <View style={styles.kvRow}>
-          <ThemedText style={styles.kvKey}>Bytes received</ThemedText>
-          <ThemedText style={styles.kvVal}>{bytesRx}</ThemedText>
-        </View>
-
-        <View style={[styles.kvRow, { alignItems: 'flex-start' }]}>
-          <ThemedText style={styles.kvKey}>Last raw message</ThemedText>
-          <ThemedText style={[styles.kvVal, styles.mono]} numberOfLines={4}>
-            {lastRaw ?? '—'}
-          </ThemedText>
-        </View>
-
-        <View style={[styles.kvRow, { alignItems: 'flex-start' }]}>
-          <ThemedText style={styles.kvKey}>Last decoded message</ThemedText>
-          <ThemedText style={[styles.kvVal, styles.mono]} numberOfLines={6}>
-            {lastDecoded ? pretty(lastDecoded) : '—'}
-          </ThemedText>
-        </View>
-
-        {lastError && (
+        {error && (
           <View style={styles.errorBox}>
             <ThemedText style={styles.errorTitle}>Error</ThemedText>
-            <ThemedText style={styles.errorText}>{lastError}</ThemedText>
+            <ThemedText>{error}</ThemedText>
           </View>
+        )}
+
+        {!error && !status && (
+          <ThemedText style={{ opacity: 0.7 }}>No status yet. Tap Refresh.</ThemedText>
         )}
       </ThemedView>
     </ParallaxScrollView>
@@ -171,24 +124,43 @@ export default function DataScreen() {
 }
 
 const styles = StyleSheet.create({
-  headerImage: { color: '#808080', bottom: -90, left: -35, position: 'absolute' },
-  titleContainer: { flexDirection: 'row', gap: 8, paddingHorizontal: 12, paddingTop: 8 },
+  headerImage: { color: "#808080", bottom: -90, left: -35, position: "absolute" },
+  titleContainer: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 12,
+    paddingTop: 8,
+  },
+  refreshBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  refreshTxt: { fontWeight: "700" },
+
   card: {
-    margin: 12, padding: 12, borderRadius: 14,
-    borderWidth: StyleSheet.hairlineWidth, borderColor: '#3a3a3a55', gap: 6
+    margin: 12,
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#3a3a3a55",
+    gap: 12,
   },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
-  dot: { width: 10, height: 10, borderRadius: 999 },
-  statusText: { fontWeight: '600' },
-  kvRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, alignItems: 'center' },
-  kvKey: { opacity: 0.7, width: 140 },
-  kvVal: { flex: 1, textAlign: 'right' },
-  mono: { fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }) },
+  row: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  kvKey: { fontWeight: "600" },
+  dot: { width: 14, height: 14, borderRadius: 999 },
+  ts: { opacity: 0.7, marginTop: 6, fontSize: 12 },
+
   errorBox: {
-    marginTop: 8, padding: 8, borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth, borderColor: '#ef444455',
-    backgroundColor: '#ef44440f'
+    marginTop: 8,
+    padding: 8,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#ef444455",
+    backgroundColor: "#ef44440f",
   },
-  errorTitle: { fontWeight: '700', marginBottom: 2 },
-  errorText: {},
+  errorTitle: { fontWeight: "700", marginBottom: 2 },
 });

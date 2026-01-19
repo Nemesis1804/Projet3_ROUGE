@@ -2,10 +2,116 @@ import http from "node:http";
 import crypto from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import bcrypt from "bcrypt";
+import mqtt from "mqtt";
 import { PrismaClient } from "./generated/prisma/index.js";
 
 const prisma = new PrismaClient();
 const PORT = 8080;
+
+// --------------------
+// ENV
+// --------------------
+const MQTT_URL = process.env.MQTT_URL || "";
+const MQTT_USER = process.env.MQTT_USER || "";
+const MQTT_PASS = process.env.MQTT_PASS || "";
+const MQTT_TOPIC = process.env.MQTT_TOPIC || "#";
+const DEVICE_FILTER = (process.env.DEVICE_FILTER || "").toLowerCase();
+const DEBUG = process.env.DEBUG === "1";
+
+// --------------------
+// MQTT (status)
+// --------------------
+let mqttClient: mqtt.MqttClient | null = null;
+let mqttConnected = false;
+let mqttLastError: string | null = null;
+let mqttMessages = 0;
+let lastMqttMessageAt: number | null = null;
+let lastMqttTopic: string | null = null;
+
+function safeJsonParse(s: string) {
+    try { return JSON.parse(s); } catch { return null; }
+}
+
+function extractDevEuiFromChirpstack(topic: string, payloadStr: string): string | null {
+    const m = topic.match(/\/device\/([0-9a-fA-F]{16})\/event\/up$/);
+    if (m?.[1]) return m[1].toLowerCase();
+
+    // fallback: try payload JSON
+    const j = safeJsonParse(payloadStr);
+    const dev = j?.deviceInfo?.devEui;
+    return typeof dev === "string" ? dev.toLowerCase() : null;
+}
+
+
+function startMqtt() {
+    if (!MQTT_URL) {
+        console.log("[MQTT] MQTT_URL missing -> mqtt status will stay false");
+        return;
+    }
+
+    const opts: mqtt.IClientOptions = {
+        reconnectPeriod: 2000,
+        keepalive: 30,
+    };
+
+    if (MQTT_USER) opts.username = MQTT_USER;
+    if (MQTT_PASS) opts.password = MQTT_PASS;
+
+    mqttClient = mqtt.connect(MQTT_URL, opts);
+
+    mqttClient.on("connect", () => {
+        mqttConnected = true;
+        mqttLastError = null;
+        console.log("[MQTT] connected ->", MQTT_URL);
+
+        mqttClient?.subscribe(MQTT_TOPIC, (err) => {
+            if (err) {
+                mqttLastError = err.message;
+                console.log("[MQTT] subscribe error:", err.message);
+            } else {
+                console.log("[MQTT] subscribed ->", MQTT_TOPIC);
+            }
+        });
+    });
+
+    mqttClient.on("reconnect", () => {
+        mqttConnected = false;
+        console.log("[MQTT] reconnecting...");
+    });
+
+    mqttClient.on("close", () => {
+        mqttConnected = false;
+        console.log("[MQTT] closed");
+    });
+
+    mqttClient.on("error", (err) => {
+        mqttConnected = false;
+        mqttLastError = err?.message ?? String(err);
+        console.log("[MQTT] error:", mqttLastError);
+    });
+
+    mqttClient.on("message", async (topic, payload) => {
+        mqttMessages += 1;
+        lastMqttMessageAt = Date.now();
+        lastMqttTopic = topic;
+
+        const payloadStr = payload?.toString?.() ?? "";
+        const devEui = extractDevEuiFromChirpstack(topic, payloadStr);
+
+        if (DEBUG) {
+            console.log("[MQTT] rx topic:", topic);
+            console.log("[MQTT] rx devEui:", devEui);
+        }
+
+        if (DEVICE_FILTER && devEui && devEui !== DEVICE_FILTER) {
+            if (DEBUG) console.log("[MQTT] ignored (device filter)");
+            return;
+        }
+    });
+}
+
+
+startMqtt();
 
 // --------------------
 // Mini auth tokens (DEV)
@@ -51,7 +157,6 @@ async function readJson(req: http.IncomingMessage): Promise<any> {
     });
 }
 
-// ✅ Type guard: assure que value est un string non vide
 function assertNonEmptyString(value: unknown, msg: string): asserts value is string {
     if (typeof value !== "string" || value.trim().length === 0) {
         throw { status: 400, message: msg };
@@ -64,23 +169,17 @@ function isLockoutAdmin(u: { firstName: string; lastName: string }) {
 
 async function requireAuth(req: http.IncomingMessage) {
     const token = getBearer(req);
-    console.log("[AUTH] bearer token?", !!token);
-
     if (!token) throw { status: 401, message: "Missing token" };
 
     const userId = sessions.get(token);
-    console.log("[AUTH] token known?", !!userId);
-
     if (!userId) throw { status: 401, message: "Invalid token" };
 
     const me = await prisma.user.findUnique({
         where: { id: userId },
         select: { id: true, firstName: true, lastName: true, role: true },
     });
-    console.log("[AUTH] user found?", !!me, me?.role);
 
     if (!me) throw { status: 401, message: "User not found" };
-
     return me;
 }
 
@@ -106,6 +205,35 @@ const server = http.createServer(async (req, res) => {
             return send(res, 200, { ok: true, service: "server_WB_DB", port: PORT });
         }
 
+        // -------- STATUS GLOBAL --------
+        if (req.method === "GET" && url === "/status") {
+            let database = false;
+            let dbError: string | null = null;
+
+            try {
+                await prisma.$queryRaw`SELECT 1`;
+                database = true;
+            } catch (e: any) {
+                dbError = e?.message ?? String(e);
+            }
+
+            return send(res, 200, {
+                api: true,
+                database,
+                dbError,
+
+                mqtt: mqttConnected,
+                mqttUrl: MQTT_URL || null,
+                mqttTopic: MQTT_TOPIC || null,
+                mqttMessages,
+                lastMqttMessageAt,
+                lastMqttTopic,
+                mqttLastError,
+
+                timestamp: Date.now(),
+            });
+        }
+
         // -------- AUTH: REGISTER --------
         if (req.method === "POST" && url === "/auth/register") {
             const body = await readJson(req);
@@ -117,7 +245,6 @@ const server = http.createServer(async (req, res) => {
             if (!fn || !ln || !pw) return send(res, 400, { error: "Missing fields" });
             if (pw.length < 3) return send(res, 400, { error: "Password too short" });
 
-            // reserved anti-lockout account
             if (isLockoutAdmin({ firstName: fn, lastName: ln })) {
                 return send(res, 403, { error: "This account is reserved (anti-lockout)." });
             }
@@ -173,11 +300,7 @@ const server = http.createServer(async (req, res) => {
                 select: { id: true, firstName: true, lastName: true, role: true, createdAt: true },
             });
 
-            return send(
-                res,
-                200,
-                rows.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() }))
-            );
+            return send(res, 200, rows.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() })));
         }
 
         // -------- ADMIN: CREATE USER --------
@@ -214,12 +337,10 @@ const server = http.createServer(async (req, res) => {
         }
 
         // -------- ADMIN: PATCH / DELETE USER BY ID --------
-        // ✅ on parse l'id et on le valide avant Prisma
         const userIdMatch = url.match(/^\/admin\/users\/([^/]+)$/);
         const userId = userIdMatch ? userIdMatch[1] : null;
 
         if ((req.method === "PATCH" || req.method === "DELETE") && userIdMatch) {
-            // ✅ assure string non vide
             assertNonEmptyString(userId, "Missing user id in URL");
 
             const me = await requireAuth(req);
@@ -250,7 +371,6 @@ const server = http.createServer(async (req, res) => {
                 return send(res, 200, { ok: true });
             }
 
-            // PATCH
             const body = await readJson(req);
             const data: any = {};
 
@@ -270,6 +390,21 @@ const server = http.createServer(async (req, res) => {
             return send(res, 200, updated);
         }
 
+        // -------- LOGS: CREATE --------
+        if (req.method === "POST" && url === "/logs") {
+            const body = await readJson(req);
+
+            const status = String(body?.status || "").trim();
+            if (!status) return send(res, 400, { ok: false, error: "Missing status" });
+
+            const created = await prisma.logs.create({
+                data: { status }, // timestamp auto
+            });
+
+            if (DEBUG) console.log("[LOGS] inserted:", created.id, created.status);
+            return send(res, 200, { ok: true, id: created.id });
+        }
+
         // default
         return send(res, 404, { error: "Not found" });
     } catch (e: any) {
@@ -281,7 +416,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 // --------------------
-// WebSocket (same server/port)
+// WebSocket (same server/port) - inchangé
 // --------------------
 const wss = new WebSocketServer({ server });
 const clients: Set<WebSocket> = new Set();
@@ -316,22 +451,6 @@ wss.on("connection", (ws: WebSocket) => {
                 );
                 return;
             }
-
-            if (json.type === "log") {
-                await prisma.logs.create({
-                    data: {
-                        status: json.status,
-                        timestamp: json.epoch ? new Date(json.epoch) : new Date(),
-                    },
-                });
-            } else if (json.type === "command") {
-                await prisma.logs.create({
-                    data: {
-                        status: json.action,
-                        timestamp: json.ts ? new Date(json.ts) : new Date(),
-                    },
-                });
-            }
         } catch (err) {
             console.error("❌ Erreur parsing JSON:", err);
         }
@@ -343,12 +462,10 @@ wss.on("connection", (ws: WebSocket) => {
         });
     });
 
-    ws.on("close", () => {
-        clients.delete(ws);
-    });
+    ws.on("close", () => clients.delete(ws));
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, "0.0.0.0", () => {
     console.log(`🚀 HTTP API  : http://localhost:${PORT}`);
     console.log(`🚀 WebSocket : ws://localhost:${PORT}`);
 });
